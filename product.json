@@ -31,10 +31,10 @@
     "resourceUrlTemplate": "https://open-vsx.org/vscode/unpkg/{publisher}/{name}/{version}/{path}"
   },
 
-  "builtInExtensions": [],
+  "_builtInExtensions_comment": "Inherit upstream's list (js-debug, etc.). Don't override — that wipes the marketplace-fetched built-ins. Our finkcode-core ships as a real folder under extensions/, not via this field.",
 
   "_uiTheme_comment": "Phase 1 step 4 — emerald accent on dark, matching the FinkSpace product card.",
   "defaultTheme": "Default Dark Modern",
 
-  "_finkcodeBootstrap_comment": "Phase 1 step 7 — finkcode-core ships pre-installed (built into the app). Copied into extensions/ during build."
+  "_finkcodeBootstrap_comment": "Phase 1 step 7 — finkcode-core ships pre-installed (built into the app). Junctioned into vscode/extensions/ by build/apply-overlay.js."
 }

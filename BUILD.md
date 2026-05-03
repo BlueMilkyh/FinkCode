@@ -1,47 +1,61 @@
-# Building FinkCode (Phase 1 bootstrap)
+# Building FinkCode (Phase 1)
 
-FinkCode is a fork of [VSCodium](https://github.com/VSCodium/vscodium),
-which is itself a libre build of [microsoft/vscode](https://github.com/microsoft/vscode)
-with telemetry/branding stripped. We build on top of VSCodium so we
-can pull upstream merges without re-doing telemetry surgery.
+FinkCode is a fork of [microsoft/vscode](https://github.com/microsoft/vscode)
+pinned to tag `1.117.0`, with our branding overlay applied via
+`build/apply-overlay.js` and the bundled `finkcode-core` extension
+junctioned into `vscode/extensions/`.
 
-This file is the operating manual for the Phase 1 bootstrap. The steps
-below are what the next session needs to run; the repo currently
-contains only the *overlay* (branding, bundled extension, CI). The
-upstream source itself is not vendored — it gets cloned at build
-time, exactly like VSCodium does.
+We chose to fork microsoft/vscode directly rather than VSCodium —
+fewer moving parts; we keep telemetry off via product.json overrides
+and accept that we'll need to manually mirror VSCodium's
+telemetry-stripping patches if the user-facing distribution requires
+it (Phase 5 concern).
 
 ## Prerequisites
 
-- Node.js 20.x (must match upstream VSCode's `.nvmrc`)
-- Yarn 1.x (Classic — VSCode's build still expects it)
-- Python 3 (for `node-gyp`)
-- Platform-specific:
-  - **Windows:** Visual Studio 2022 with "Desktop development with C++"
-  - **macOS:** Xcode + command-line tools
-  - **Linux:** `libxkbfile-dev`, `libsecret-1-dev`, `pkg-config`, `g++`
+- **Node 22.22.1** (matches upstream `vscode/.nvmrc`)
+- **Python 3** (any 3.x — for node-gyp)
+- **Platform native toolchain:**
+  - Windows: **Visual Studio Build Tools 2022/2026** with "Desktop development with C++" workload
+  - macOS: Xcode + command-line tools
+  - Linux: `libxkbfile-dev`, `libsecret-1-dev`, `pkg-config`, `g++`, `libsecret-1-dev`
 
-## Phase 1 build flow (target state — not implemented yet)
+## Build flow
 
 ```bash
-# 1. Bootstrap upstream source at a pinned tag
-./build/bootstrap-upstream.sh    # clones microsoft/vscode at tag $VSCODE_TAG into ./vscode/
+# 1. Bootstrap upstream source at the pinned tag
+./build/bootstrap-upstream.sh    # clones microsoft/vscode at $VSCODE_TAG into ./vscode/
 
-# 2. Apply our overlay (product.json + bundled extensions)
-./build/apply-overlay.sh         # copies product.json, links extensions/finkcode-core/
+# 2. Apply our overlay (product.json deep-merge + junction extensions/finkcode-core)
+./build/apply-overlay.sh         # delegates to apply-overlay.js
 
-# 3. Apply patches (Phase 1: none; later phases may add)
-./build/apply-patches.sh         # iterates patches/*.patch
+# 3. (Phase 2+ may add patches; Phase 1 has none.)
+./build/apply-patches.sh
 
-# 4. Install dependencies
-cd vscode && yarn
+# 4. Install upstream dependencies — note: VSCode 1.117 uses npm, not yarn
+cd vscode && npm install         # ~30-60 min on first run; compiles every native module
+                                 # from source (build_from_source=true in .npmrc)
 
 # 5. Compile the bundled extension
-cd ../extensions/finkcode-core && yarn install && yarn compile
+cd ../extensions/finkcode-core && npm install && npm run compile
 
 # 6. Dev loop
-cd ../../vscode && yarn watch       # one terminal
-./scripts/code.sh                   # another (Windows: scripts\code.bat)
+cd ../../vscode && npm run watch                      # one terminal — long-running
+./scripts/code.sh                                     # another (Windows: scripts\code.bat)
+```
+
+`scripts\code.bat` reads `nameShort` from `product.json` and runs
+`.build\electron\<nameShort>.exe`. After our overlay that resolves to
+`.build\electron\FinkCode.exe`.
+
+## Environment variables you may need
+
+```bash
+# Windows: point node-gyp at Python (npm 10 dropped the python config option)
+set PYTHON=%LOCALAPPDATA%\Programs\Python\Python312\python.exe
+
+# Use the right Node when you have multiple installed
+set PATH=%LOCALAPPDATA%\Programs\node22;%PATH%
 ```
 
 ## Pinning the upstream version
@@ -51,8 +65,8 @@ break us. Bump it in this file's `VSCODE_TAG` constant *and* in
 `build/bootstrap-upstream.sh`. Test the dev loop end-to-end before
 merging the bump.
 
-`VSCODE_TAG=1.95.0` (placeholder — first real bootstrap will pick the
-latest stable tag at that time).
+`VSCODE_TAG=1.117.0` — current pin (matches the version Aljaž has
+installed, simplifies cross-version testing).
 
 ## What lives in this repo
 
@@ -74,9 +88,9 @@ latest stable tag at that time).
 
 ## Phase status
 
-- [x] Phase 0: repo bootstrapped (this commit)
-- [ ] Phase 1: write the bootstrap/overlay scripts, run a dev build, set up CI
-- [ ] Phase 2: AI side panel (`finkcode-core` chat + tools)
-- [ ] Phase 3: Cmd+K + Composer + inline diff
-- [ ] Phase 4: FinkSpace ↔ FinkCode integration (FinkSpace side already shipped — see [BlueMilkyh/FinkSpace](https://github.com/BlueMilkyh/FinkSpace))
+- [x] Phase 0: repo bootstrapped
+- [x] Phase 1: VSCodium-style bootstrap & overlay scripts; pinned upstream; dev build target
+- [x] Phase 2: AI side panel (`finkcode-core` chat + claude stream-json bridge + native tool use)
+- [ ] Phase 3: Cmd+K + Composer + per-hunk accept/reject diff overlay
+- [x] Phase 4: FinkSpace ↔ FinkCode integration on the FinkSpace side ([BlueMilkyh/FinkSpace `be722dc`](https://github.com/BlueMilkyh/FinkSpace))
 - [ ] Phase 5: distribution (auto-updater, signing, installers)

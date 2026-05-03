@@ -1,16 +1,13 @@
 #!/usr/bin/env bash
-# apply-overlay.sh — Phase 1 placeholder.
+# apply-overlay.sh — overlays our FinkCode branding onto the upstream
+# microsoft/vscode checkout.
 #
-# Copies product.json over upstream's, and symlinks
-# extensions/finkcode-core into vscode/extensions/ so it ships
-# pre-installed in the built app.
+# Real implementation lives in build/apply-overlay.js (Node script —
+# easier deep-merge of product.json than shell). This wrapper exists
+# so CI and contributors can call a stable filename regardless of
+# which language we ended up writing the implementation in.
 
 set -euo pipefail
 
-VSCODE_DIR="${VSCODE_DIR:-vscode}"
-
-echo "[apply-overlay] Phase 1 placeholder — not yet implemented."
-echo "  vscode dir: $VSCODE_DIR"
-echo ""
-echo "Next session will fill this in. See BUILD.md."
-exit 0
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec node "$DIR/apply-overlay.js" "$@"
