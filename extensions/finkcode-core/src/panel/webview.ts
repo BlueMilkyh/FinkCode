@@ -413,10 +413,11 @@ export function renderChatHtml(
     const messagesById = new Map();
 
     function setEmptyState(active) {
+      // Only swap the placeholder ⇄ message log. Status row + composer
+      // stay visible regardless so the user always has something to
+      // interact with — even if a state transition glitches.
       emptyState.hidden = !active;
       log.hidden = active;
-      composer.hidden = active;
-      status.hidden = active;
     }
 
     openFolderBtn.addEventListener("click", () => {
@@ -714,31 +715,43 @@ export function renderChatHtml(
     });
 
     window.addEventListener("message", (e) => {
-      const msg = e.data;
-      switch (msg.type) {
-        case "history":
-          setEmptyState(false);
-          clearAll();
-          for (const m of msg.messages) appendMessage(m);
-          break;
-        case "append":
-          setEmptyState(false);
-          appendMessage(msg.message);
-          break;
-        case "update":
-          updateMessage(msg.messageId, msg.patch);
-          break;
-        case "state":
-          setEmptyState(false);
-          setState(msg.status, msg.activity);
-          break;
-        case "clear":
-          clearAll();
-          break;
-        case "noWorkspace":
-          clearAll();
-          setEmptyState(true);
-          break;
+      try {
+        const msg = e.data;
+        switch (msg.type) {
+          case "history":
+            setEmptyState(false);
+            clearAll();
+            for (const m of msg.messages) appendMessage(m);
+            break;
+          case "append":
+            setEmptyState(false);
+            appendMessage(msg.message);
+            break;
+          case "update":
+            updateMessage(msg.messageId, msg.patch);
+            break;
+          case "state":
+            setEmptyState(false);
+            setState(msg.status, msg.activity);
+            break;
+          case "clear":
+            clearAll();
+            break;
+          case "noWorkspace":
+            clearAll();
+            setEmptyState(true);
+            break;
+        }
+      } catch (err) {
+        // Surface render errors as a system-style message in the log
+        // rather than leaving the panel in an inconsistent state. The
+        // chat itself stays usable; the user can still send input.
+        console.error("[finkcode panel] message handler error:", err);
+        const errDiv = document.createElement("div");
+        errDiv.className = "msg system";
+        errDiv.textContent =
+          "[panel error] " + (err && err.message ? err.message : String(err));
+        log.appendChild(errDiv);
       }
     });
 
