@@ -13,6 +13,7 @@ import { BridgeManager } from "./bridge/manager";
 import { ChatViewProvider } from "./panel/ChatViewProvider";
 
 let bridge: BridgeManager | null = null;
+let chatProvider: ChatViewProvider | null = null;
 let log: vscode.OutputChannel | null = null;
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -20,58 +21,37 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(log);
   log.appendLine(`[finkcode-core] activated (v${context.extension.packageJSON.version})`);
 
+  // Build a bridge for the active folder, if any. Without one the panel
+  // still shows — it just renders an "Open a folder" placeholder.
   const folder = vscode.workspace.workspaceFolders?.[0];
-  if (folder) {
-    bridge = createBridge(folder, log, context);
-  } else {
-    log.appendLine(
-      "[finkcode-core] no workspace folder — chat panel will prompt the user to open one.",
-    );
+  bridge = folder ? createBridge(folder, log) : null;
+  if (!bridge) {
+    log.appendLine("[finkcode-core] no workspace folder yet — chat panel will prompt the user.");
   }
 
-  // The chat panel only registers if we have a folder to anchor the
-  // bridge to. Without one the activity-bar still shows the FinkCode
-  // container (declared in package.json) — VS Code will render its
-  // own "open a folder" hint until a workspace exists.
-  if (bridge) {
-    const chatProvider = new ChatViewProvider(context.extensionUri, bridge);
-    context.subscriptions.push(
-      vscode.window.registerWebviewViewProvider(
-        ChatViewProvider.viewType,
-        chatProvider,
-        { webviewOptions: { retainContextWhenHidden: true } },
-      ),
-    );
-  }
+  // The chat panel is registered unconditionally so VS Code always has
+  // a provider to render — otherwise the activity-bar container shows
+  // an indefinite loading spinner.
+  chatProvider = new ChatViewProvider(context.extensionUri, bridge);
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(
+      ChatViewProvider.viewType,
+      chatProvider,
+      { webviewOptions: { retainContextWhenHidden: true } },
+    ),
+  );
 
-  // React to workspace folder changes — recreate the bridge if the user
-  // opens a different folder. Keeps things simple: any change → reset.
+  // React to workspace folder changes: rebuild the bridge for the new
+  // folder, hand it to the panel, and let the webview rerender. No
+  // window reload needed.
   context.subscriptions.push(
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
-      const next = vscode.workspace.workspaceFolders?.[0];
-      if (!next) {
-        bridge?.dispose();
-        bridge = null;
-        return;
-      }
-      const sameAsBefore =
-        bridge && bridge.workspaceRoot === next.uri.fsPath;
-      if (sameAsBefore) return;
+      const next = vscode.workspace.workspaceFolders?.[0] ?? null;
+      const same = bridge && next && bridge.workspaceRoot === next.uri.fsPath;
+      if (same) return;
       bridge?.dispose();
-      bridge = createBridge(next, log!, context);
-      // The view provider is keyed off the bridge instance — easiest
-      // path is to ask the user to reload the window when folder
-      // changes. Not common in normal editor flow.
-      vscode.window
-        .showInformationMessage(
-          `FinkCode workspace changed to ${next.name}. Reload window for chat to follow.`,
-          "Reload Window",
-        )
-        .then((choice) => {
-          if (choice === "Reload Window") {
-            vscode.commands.executeCommand("workbench.action.reloadWindow");
-          }
-        });
+      bridge = next ? createBridge(next, log!) : null;
+      chatProvider?.setBridge(bridge);
     }),
   );
 
@@ -85,7 +65,6 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // ─── Phase 3 stubs ────────────────────────────────────────────────
   // These exist so the keybindings in package.json don't fail to bind.
-  // They surface a one-line "coming soon" toast.
 
   const phase3Stub = (label: string, message: string) =>
     vscode.commands.registerCommand(`finkcode.${label}`, () => {
@@ -109,20 +88,19 @@ export function activate(context: vscode.ExtensionContext): void {
 export function deactivate(): void {
   bridge?.dispose();
   bridge = null;
+  chatProvider = null;
 }
 
 function createBridge(
   folder: vscode.WorkspaceFolder,
   output: vscode.OutputChannel,
-  _context: vscode.ExtensionContext,
 ): BridgeManager {
   const config = vscode.workspace.getConfiguration("finkcode");
   const claudeBinaryPath = config.get<string>("claudeBinaryPath", "");
-  const manager = new BridgeManager({
+  return new BridgeManager({
     workspaceRoot: folder.uri.fsPath,
     workspaceName: folder.name || path.basename(folder.uri.fsPath),
     claudeBinaryPath,
     log: output,
   });
-  return manager;
 }

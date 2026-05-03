@@ -205,6 +205,47 @@ export function renderChatHtml(
       opacity: 0.5;
       cursor: not-allowed;
     }
+    #empty {
+      flex: 1 1 auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    #empty[hidden] {
+      display: none;
+    }
+    .empty-inner {
+      max-width: 280px;
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      align-items: center;
+    }
+    .empty-title {
+      font-weight: 600;
+      font-size: 13px;
+      color: var(--vscode-foreground);
+    }
+    .empty-body {
+      font-size: 12px;
+      color: var(--vscode-descriptionForeground);
+      line-height: 1.5;
+    }
+    #empty button {
+      margin-top: 6px;
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+      border: none;
+      padding: 6px 14px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    #empty button:hover {
+      background: var(--vscode-button-hoverBackground);
+    }
   </style>
 </head>
 <body>
@@ -215,6 +256,13 @@ export function renderChatHtml(
     <button id="reset" title="Clear chat history and kill the bridge">Reset</button>
   </div>
   <div id="log" aria-live="polite"></div>
+  <div id="empty" hidden>
+    <div class="empty-inner">
+      <div class="empty-title">No folder open</div>
+      <div class="empty-body">FinkCode chats live inside a workspace. Open a folder to start.</div>
+      <button id="open-folder">Open Folder…</button>
+    </div>
+  </div>
   <form id="composer">
     <textarea id="input" placeholder="Ask FinkCode about this codebase, or describe a change…" rows="1"></textarea>
     <button id="send" type="submit">Send</button>
@@ -229,8 +277,23 @@ export function renderChatHtml(
     const composer = document.getElementById("composer");
     const input = document.getElementById("input");
     const sendBtn = document.getElementById("send");
+    const emptyState = document.getElementById("empty");
+    const openFolderBtn = document.getElementById("open-folder");
 
     const messagesById = new Map();
+
+    function setEmptyState(active) {
+      emptyState.hidden = !active;
+      log.hidden = active;
+      composer.hidden = active;
+      status.hidden = active;
+    }
+
+    openFolderBtn.addEventListener("click", () => {
+      // Host runs workbench.action.files.openFolder and the bridge
+      // gets recreated when onDidChangeWorkspaceFolders fires.
+      vscode.postMessage({ type: "openFolder" });
+    });
 
     function escapeHtml(s) {
       return s
@@ -370,20 +433,27 @@ export function renderChatHtml(
       const msg = e.data;
       switch (msg.type) {
         case "history":
+          setEmptyState(false);
           clearAll();
           for (const m of msg.messages) appendMessage(m);
           break;
         case "append":
+          setEmptyState(false);
           appendMessage(msg.message);
           break;
         case "update":
           updateMessage(msg.messageId, msg.patch);
           break;
         case "state":
+          setEmptyState(false);
           setState(msg.status, msg.activity);
           break;
         case "clear":
           clearAll();
+          break;
+        case "noWorkspace":
+          clearAll();
+          setEmptyState(true);
           break;
       }
     });

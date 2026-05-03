@@ -114,11 +114,13 @@ export type FromWebviewMessage =
   | { type: "send"; text: string }
   | { type: "interrupt" }
   | { type: "reset" }
-  | { type: "ready" };
+  | { type: "ready" }
+  | { type: "openFolder" };
 
 export type FromHostMessage =
   | { type: "state"; status: BridgeStatus; activity: string | null }
   | { type: "history"; messages: ChatMessage[] }
   | { type: "append"; message: ChatMessage }
   | { type: "update"; messageId: string; patch: Partial<ChatMessage> }
-  | { type: "clear" };
+  | { type: "clear" }
+  | { type: "noWorkspace" };
