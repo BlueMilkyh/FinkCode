@@ -59,6 +59,13 @@ export interface ChatToolRecord {
    * - `"snapshot"` — file existed but is untracked; restore from in-memory snapshot
    */
   revertStrategy?: "git" | "unlink" | "snapshot";
+  /**
+   * Pre-rendered unified diff of the file change. Computed in
+   * BridgeManager from the snapshot vs the on-disk content the moment
+   * tool_result lands. Lets the panel render an inline mini-diff
+   * preview without round-tripping to VS Code's diff editor.
+   */
+  inlineDiff?: string;
 }
 
 // ─── claude stream-json events ───────────────────────────────────────

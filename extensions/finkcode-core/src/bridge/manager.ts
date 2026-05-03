@@ -18,6 +18,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { randomUUID } from "crypto";
+import { createPatch } from "diff";
 import { buildEditorSystemPrompt } from "./system-prompt";
 import type {
   BridgeStatus,
@@ -521,18 +522,58 @@ export class BridgeManager implements vscode.Disposable {
                 .join("");
         const messageId = this.findToolMessageByUseId(block.tool_use_id);
         if (messageId) {
-          this.updateMessage(messageId, {
-            tool: {
-              ...(this.findMessage(messageId)?.tool as ChatToolRecord),
-              status: block.is_error ? "error" : "ok",
-              result: text,
-              error: block.is_error ? text : undefined,
-            },
-          });
+          const existing = this.findMessage(messageId)?.tool as ChatToolRecord;
+          const patch: Partial<ChatToolRecord> = {
+            ...existing,
+            status: block.is_error ? "error" : "ok",
+            result: text,
+            error: block.is_error ? text : undefined,
+          };
+          // Compute an inline unified diff for writer tools using the
+          // snapshot we captured before claude wrote. Cheap; runs once
+          // per edit. Skipped on errors (no edit happened) and on
+          // tools without an editedPath.
+          if (
+            !block.is_error &&
+            existing.editedPath &&
+            this.editSnapshots.has(block.tool_use_id)
+          ) {
+            patch.inlineDiff = this.computeInlineDiff(
+              block.tool_use_id,
+              existing.editedPath,
+            );
+          }
+          this.updateMessage(messageId, { tool: patch as ChatToolRecord });
         }
       }
     }
     this.setState({ status: "thinking", activity: null });
+  }
+
+  /**
+   * Build a unified-diff string comparing the captured pre-edit
+   * snapshot to the current on-disk content. Used by the panel to
+   * render an inline preview of what claude changed without round-
+   * tripping through VS Code's diff editor.
+   */
+  private computeInlineDiff(toolUseId: string, filePath: string): string {
+    const snap = this.editSnapshots.get(toolUseId);
+    if (!snap) return "";
+    let after = "";
+    try {
+      if (fs.existsSync(filePath)) {
+        after = fs.readFileSync(filePath, "utf8");
+      }
+    } catch {
+      return "";
+    }
+    const before = snap.existed ? snap.content ?? "" : "";
+    const fileName = path.basename(filePath);
+    // 3 lines of context keeps the preview compact; the user can hit
+    // 'View diff' for the full editor view if they want more.
+    return createPatch(fileName, before, after, "before", "after", {
+      context: 3,
+    });
   }
 
   // ─── Chat history mutations ──────────────────────────────────────

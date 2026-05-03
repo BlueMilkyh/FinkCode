@@ -215,6 +215,68 @@ export function renderChatHtml(
       background: rgba(255, 191, 0, 0.18);
       color: var(--vscode-charts-yellow);
     }
+    .tool-detail {
+      margin-top: 4px;
+      font-family: var(--vscode-editor-font-family, "Cascadia Code", monospace);
+      font-size: 11px;
+    }
+    .tool-detail summary {
+      cursor: pointer;
+      color: var(--vscode-descriptionForeground);
+      padding: 2px 6px;
+      border-radius: 3px;
+      list-style: none;
+      user-select: none;
+    }
+    .tool-detail summary::before {
+      content: "▸ ";
+      display: inline-block;
+      transition: transform 0.1s;
+    }
+    .tool-detail[open] summary::before {
+      content: "▾ ";
+    }
+    .tool-detail summary:hover {
+      color: var(--vscode-foreground);
+      background: var(--vscode-list-hoverBackground);
+    }
+    .tool-detail .body {
+      margin-top: 4px;
+      padding: 8px 10px;
+      background: var(--vscode-textCodeBlock-background);
+      border-radius: 4px;
+      max-height: 360px;
+      overflow: auto;
+      white-space: pre;
+      font-family: var(--vscode-editor-font-family, "Cascadia Code", monospace);
+    }
+    .tool-detail .body.terminal {
+      background: var(--vscode-terminal-background, #0c0c0c);
+      color: var(--vscode-terminal-foreground, #cccccc);
+      border: 1px solid var(--vscode-terminal-border, transparent);
+    }
+    .tool-detail .body.diff {
+      line-height: 1.4;
+    }
+    .tool-detail .body.diff .add {
+      background: rgba(46, 160, 67, 0.18);
+      color: var(--vscode-charts-green);
+      display: block;
+    }
+    .tool-detail .body.diff .del {
+      background: rgba(248, 81, 73, 0.16);
+      color: var(--vscode-errorForeground);
+      display: block;
+    }
+    .tool-detail .body.diff .hunk {
+      color: var(--vscode-charts-blue);
+      display: block;
+      margin-top: 6px;
+    }
+    .tool-detail .body.diff .meta {
+      color: var(--vscode-descriptionForeground);
+      display: block;
+    }
     .role {
       font-size: 10px;
       font-weight: 600;
@@ -400,6 +462,11 @@ export function renderChatHtml(
       div.className = "msg " + m.role;
       div.dataset.id = m.id;
       if (m.role === "tool" && m.tool) {
+        const header = document.createElement("div");
+        header.style.display = "flex";
+        header.style.alignItems = "center";
+        header.style.gap = "8px";
+        header.style.flexWrap = "wrap";
         const badge = document.createElement("span");
         badge.className = "badge " + m.tool.status;
         badge.textContent = m.tool.status;
@@ -409,10 +476,13 @@ export function renderChatHtml(
         const args = document.createElement("span");
         args.className = "args";
         args.textContent = shortArgs(m.tool.input);
-        div.appendChild(badge);
-        div.appendChild(name);
-        div.appendChild(args);
-        renderToolActions(div, m.tool);
+        header.appendChild(badge);
+        header.appendChild(name);
+        header.appendChild(args);
+        div.style.display = "block";
+        div.appendChild(header);
+        renderToolActions(header, m.tool);
+        renderToolDetail(div, m.tool);
       } else {
         const role = document.createElement("div");
         role.className = "role";
@@ -452,12 +522,86 @@ export function renderChatHtml(
         // Re-render the action group (View diff / Accept / Reject /
         // resolution badge) from the latest tool record. Cheap; the
         // group only has 0-3 buttons at any time.
-        renderToolActions(existing, patch.tool);
+        const header = existing.firstElementChild;
+        if (header) renderToolActions(header, patch.tool);
+        renderToolDetail(existing, patch.tool);
       }
       if (typeof patch.text === "string") {
         const body = existing.querySelector(".body");
         if (body) body.innerHTML = renderText(patch.text);
       }
+    }
+
+    /**
+     * Render the expandable detail block under a tool row.
+     *
+     *   - Bash → terminal-styled monospace block of stdout
+     *   - Edit/Write/Create → side-by-side-ish unified diff with
+     *     green/red coloring on +/- lines
+     *   - Other tools with output (Read, Grep, Glob, etc.) → plain
+     *     monospace block
+     *
+     * The block is collapsed by default; the user opens it on demand.
+     */
+    function renderToolDetail(row, tool) {
+      const old = row.querySelector(":scope > .tool-detail");
+      if (old) old.remove();
+
+      const isWriter = !!tool.editedPath;
+      const isBash = tool.name === "Bash";
+      const result = typeof tool.result === "string" ? tool.result : "";
+
+      // For writer tools we prefer the inline unified diff (computed
+      // from our snapshot). For everything else we show the raw
+      // tool_result text claude returned.
+      const diff = isWriter && tool.inlineDiff ? tool.inlineDiff : "";
+      if (!diff && !result) return;
+
+      const details = document.createElement("details");
+      details.className = "tool-detail";
+      const summary = document.createElement("summary");
+      summary.textContent = diff
+        ? "diff preview"
+        : isBash
+        ? "terminal output"
+        : "output";
+      const body = document.createElement("div");
+      body.className = "body";
+      if (diff) {
+        body.classList.add("diff");
+        body.innerHTML = renderDiffHtml(diff);
+      } else {
+        if (isBash) body.classList.add("terminal");
+        body.textContent = truncate(result, 4000);
+      }
+      details.appendChild(summary);
+      details.appendChild(body);
+      row.appendChild(details);
+    }
+
+    function renderDiffHtml(text) {
+      const lines = text.split(/\r?\n/);
+      const out = [];
+      for (const line of lines) {
+        const safe = escapeHtml(line);
+        if (line.startsWith("@@")) {
+          out.push('<span class="hunk">' + safe + "</span>");
+        } else if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("Index")) {
+          out.push('<span class="meta">' + safe + "</span>");
+        } else if (line.startsWith("+")) {
+          out.push('<span class="add">' + safe + "</span>");
+        } else if (line.startsWith("-")) {
+          out.push('<span class="del">' + safe + "</span>");
+        } else {
+          out.push('<span>' + safe + "</span>");
+        }
+      }
+      return out.join("\n");
+    }
+
+    function truncate(s, max) {
+      if (s.length <= max) return s;
+      return s.slice(0, max) + "\n…\n[truncated " + (s.length - max) + " chars]";
     }
 
     /**
