@@ -143,6 +143,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         );
         return;
       }
+      case "viewDiff": {
+        // Open VS Code's diff editor comparing HEAD ↔ working tree
+        // for the file claude just edited. Falls back to opening the
+        // file as a regular editor when git.openChange isn't
+        // applicable (file is untracked / no git repo).
+        const uri = vscode.Uri.file(msg.path);
+        try {
+          await vscode.commands.executeCommand("git.openChange", uri);
+        } catch {
+          await vscode.window.showTextDocument(uri);
+        }
+        return;
+      }
     }
   }
 

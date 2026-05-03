@@ -37,6 +37,13 @@ export interface ChatToolRecord {
   result?: string;
   /** Error message when status === "error". */
   error?: string;
+  /**
+   * Absolute path of the file the tool edited (Edit / Write / MultiEdit).
+   * Populated when the tool name indicates a write operation; lets the
+   * panel render a "View diff" link that opens VS Code's diff editor
+   * comparing HEAD vs the working tree.
+   */
+  editedPath?: string;
 }
 
 // ─── claude stream-json events ───────────────────────────────────────
@@ -115,7 +122,8 @@ export type FromWebviewMessage =
   | { type: "interrupt" }
   | { type: "reset" }
   | { type: "ready" }
-  | { type: "openFolder" };
+  | { type: "openFolder" }
+  | { type: "viewDiff"; path: string };
 
 export type FromHostMessage =
   | { type: "state"; status: BridgeStatus; activity: string | null }

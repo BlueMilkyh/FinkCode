@@ -360,6 +360,7 @@ export class BridgeManager implements vscode.Disposable {
           name: block.name,
           input: block.input,
           status: "pending",
+          editedPath: extractEditedPath(block.name, block.input),
         });
         this.setState({
           status: "tool",
@@ -560,3 +561,26 @@ export class BridgeManager implements vscode.Disposable {
 // this string instead of allocating a UUID. Not used yet; reserved for
 // the diff overlay listener in Phase 3.
 export const SubscribeAll = SUBSCRIPTION_ALL;
+
+/**
+ * Pull a file path out of a tool_use input when the tool is one we
+ * know writes to disk. Returns the absolute path or null. Anthropic's
+ * built-in tools use `file_path`, MCP tools sometimes use `path`.
+ */
+function extractEditedPath(
+  toolName: string,
+  input: Record<string, unknown>,
+): string | undefined {
+  const writers = new Set([
+    "Edit",
+    "Write",
+    "MultiEdit",
+    "NotebookEdit",
+    "str_replace_editor",
+    "create_file",
+  ]);
+  if (!writers.has(toolName)) return undefined;
+  const candidate = input.file_path ?? input.path ?? input.filename;
+  if (typeof candidate !== "string" || !candidate.trim()) return undefined;
+  return candidate;
+}

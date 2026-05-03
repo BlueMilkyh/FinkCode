@@ -147,6 +147,21 @@ export function renderChatHtml(
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .msg.tool .diff-link {
+      flex: 0 0 auto;
+      font-size: 10px;
+      padding: 2px 8px;
+      border-radius: 3px;
+      background: transparent;
+      border: 1px solid var(--vscode-textLink-foreground);
+      color: var(--vscode-textLink-foreground);
+      cursor: pointer;
+      text-decoration: none;
+    }
+    .msg.tool .diff-link:hover {
+      background: var(--vscode-textLink-foreground);
+      color: var(--vscode-editor-background);
+    }
     .role {
       font-size: 10px;
       font-weight: 600;
@@ -344,6 +359,18 @@ export function renderChatHtml(
         div.appendChild(badge);
         div.appendChild(name);
         div.appendChild(args);
+        if (m.tool.editedPath) {
+          const link = document.createElement("button");
+          link.className = "diff-link";
+          link.type = "button";
+          link.textContent = "View diff";
+          link.title = "Open VS Code diff editor — HEAD ↔ working tree";
+          link.dataset.path = m.tool.editedPath;
+          link.addEventListener("click", () => {
+            vscode.postMessage({ type: "viewDiff", path: m.tool.editedPath });
+          });
+          div.appendChild(link);
+        }
       } else {
         const role = document.createElement("div");
         role.className = "role";
@@ -382,6 +409,27 @@ export function renderChatHtml(
         if (badge) {
           badge.className = "badge " + patch.tool.status;
           badge.textContent = patch.tool.status;
+        }
+        // Surface the diff link once the tool finished — the editedPath
+        // is set at append time, but we wait for a clean ok before
+        // showing the link so the user only sees actionable rows.
+        if (patch.tool.status === "ok" && patch.tool.editedPath) {
+          let link = existing.querySelector(".diff-link");
+          if (!link) {
+            link = document.createElement("button");
+            link.className = "diff-link";
+            link.type = "button";
+            link.textContent = "View diff";
+            link.title = "Open VS Code diff editor — HEAD ↔ working tree";
+            link.dataset.path = patch.tool.editedPath;
+            link.addEventListener("click", () => {
+              vscode.postMessage({
+                type: "viewDiff",
+                path: patch.tool.editedPath,
+              });
+            });
+            existing.appendChild(link);
+          }
         }
       }
       if (typeof patch.text === "string") {
