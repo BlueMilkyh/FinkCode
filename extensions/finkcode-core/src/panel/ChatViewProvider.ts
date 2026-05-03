@@ -156,6 +156,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
         return;
       }
+      case "acceptEdit": {
+        this.bridge?.acceptEdit(msg.toolUseId);
+        return;
+      }
+      case "rejectEdit": {
+        await this.bridge?.rejectEdit(msg.toolUseId);
+        return;
+      }
     }
   }
 

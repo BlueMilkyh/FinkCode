@@ -69,6 +69,16 @@ export class BridgeManager implements vscode.Disposable {
   private disposed = false;
   /** Maximum stderr lines we hold for inclusion in exit-error messages. */
   private static readonly STDERR_TAIL_MAX = 20;
+  /**
+   * Per-edit snapshot of the file contents BEFORE claude wrote to it.
+   * Captured the moment we see a writer tool_use block, so the user
+   * can reject the edit even when the file isn't tracked by git. Keyed
+   * by tool_use_id; cleared on accept or after successful reject.
+   */
+  private editSnapshots = new Map<
+    string,
+    { path: string; existed: boolean; content: string | null }
+  >();
 
   constructor(private readonly opts: BridgeManagerOptions) {}
 
@@ -175,8 +185,80 @@ export class BridgeManager implements vscode.Disposable {
     }
     this.sessionId = null;
     this.history = [];
+    this.editSnapshots.clear();
     this.notifyClear();
     this.setState({ status: "idle", activity: null });
+  }
+
+  /**
+   * User accepted the AI edit — keep the file as-is, drop the snapshot.
+   */
+  acceptEdit(toolUseId: string): void {
+    this.editSnapshots.delete(toolUseId);
+    this.markToolResolution(toolUseId, "accepted");
+  }
+
+  /**
+   * User rejected the AI edit — restore the file to its pre-edit state
+   * using whichever revert strategy matches.
+   */
+  async rejectEdit(toolUseId: string): Promise<void> {
+    const messageId = this.findToolMessageByUseId(toolUseId);
+    const message = messageId ? this.findMessage(messageId) : undefined;
+    const tool = message?.tool;
+    if (!tool || !tool.editedPath) return;
+
+    const snap = this.editSnapshots.get(toolUseId);
+    let success = false;
+    try {
+      if (tool.revertStrategy === "git") {
+        const r = cp.spawnSync(
+          "git",
+          ["restore", "--source=HEAD", "--worktree", "--", tool.editedPath],
+          { cwd: this.opts.workspaceRoot, encoding: "utf8" },
+        );
+        success = r.status === 0;
+        if (!success) {
+          this.opts.log.appendLine(
+            `[bridge] git restore failed for ${tool.editedPath}: ${r.stderr ?? ""}`,
+          );
+        }
+      } else if (tool.revertStrategy === "unlink") {
+        if (fs.existsSync(tool.editedPath)) {
+          fs.unlinkSync(tool.editedPath);
+        }
+        success = true;
+      } else if (tool.revertStrategy === "snapshot") {
+        if (snap && snap.existed && snap.content !== null) {
+          fs.writeFileSync(tool.editedPath, snap.content, "utf8");
+          success = true;
+        } else {
+          this.opts.log.appendLine(
+            `[bridge] no snapshot for ${tool.editedPath}; cannot revert`,
+          );
+        }
+      }
+    } catch (e) {
+      this.opts.log.appendLine(
+        `[bridge] reject failed for ${tool.editedPath}: ${this.errMsg(e)}`,
+      );
+    }
+
+    this.editSnapshots.delete(toolUseId);
+    this.markToolResolution(toolUseId, success ? "rejected" : "reject_failed");
+  }
+
+  private markToolResolution(
+    toolUseId: string,
+    resolution: NonNullable<ChatToolRecord["resolution"]>,
+  ): void {
+    const messageId = this.findToolMessageByUseId(toolUseId);
+    if (!messageId) return;
+    const existing = this.findMessage(messageId);
+    if (!existing?.tool) return;
+    this.updateMessage(messageId, {
+      tool: { ...existing.tool, resolution },
+    });
   }
 
   dispose(): void {
@@ -356,18 +438,73 @@ export class BridgeManager implements vscode.Disposable {
           this.appendMessage("assistant", block.text);
         }
       } else if (block.type === "tool_use") {
+        const editedPath = extractEditedPath(block.name, block.input);
+        let revertStrategy: ChatToolRecord["revertStrategy"];
+        if (editedPath) {
+          revertStrategy = this.captureEditSnapshot(block.id, editedPath);
+        }
         this.appendToolMessage({
           toolUseId: block.id,
           name: block.name,
           input: block.input,
           status: "pending",
-          editedPath: extractEditedPath(block.name, block.input),
+          editedPath,
+          // null === "user hasn't decided yet" once the tool succeeds.
+          resolution: editedPath ? null : undefined,
+          revertStrategy,
         });
         this.setState({
           status: "tool",
           activity: `Running ${block.name}…`,
         });
       }
+    }
+  }
+
+  /**
+   * Capture file state before claude writes to it. Returns the revert
+   * strategy that fits the file's current state:
+   *   - "unlink"   — file does not exist; revert = delete after edit
+   *   - "git"      — file exists and is tracked; revert via `git restore`
+   *   - "snapshot" — file exists but is untracked; we keep its content
+   *                  in-memory so revert can write it back
+   */
+  private captureEditSnapshot(
+    toolUseId: string,
+    filePath: string,
+  ): NonNullable<ChatToolRecord["revertStrategy"]> {
+    let existed = false;
+    let content: string | null = null;
+    try {
+      existed = fs.existsSync(filePath);
+      if (existed) {
+        content = fs.readFileSync(filePath, "utf8");
+      }
+    } catch (e) {
+      this.opts.log.appendLine(
+        `[bridge] could not snapshot ${filePath}: ${this.errMsg(e)}`,
+      );
+    }
+    this.editSnapshots.set(toolUseId, {
+      path: filePath,
+      existed,
+      content,
+    });
+    if (!existed) return "unlink";
+    if (this.isGitTracked(filePath)) return "git";
+    return "snapshot";
+  }
+
+  private isGitTracked(filePath: string): boolean {
+    try {
+      const result = cp.spawnSync(
+        "git",
+        ["ls-files", "--error-unmatch", "--", filePath],
+        { cwd: this.opts.workspaceRoot, stdio: "ignore" },
+      );
+      return result.status === 0;
+    } catch {
+      return false;
     }
   }
 

@@ -162,6 +162,59 @@ export function renderChatHtml(
       background: var(--vscode-textLink-foreground);
       color: var(--vscode-editor-background);
     }
+    .msg.tool .actions {
+      display: inline-flex;
+      gap: 4px;
+      flex: 0 0 auto;
+    }
+    .msg.tool .accept,
+    .msg.tool .reject {
+      font-size: 11px;
+      width: 22px;
+      height: 22px;
+      border-radius: 3px;
+      border: 1px solid transparent;
+      cursor: pointer;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .msg.tool .accept {
+      background: rgba(46, 160, 67, 0.18);
+      color: var(--vscode-charts-green);
+      border-color: rgba(46, 160, 67, 0.4);
+    }
+    .msg.tool .accept:hover {
+      background: rgba(46, 160, 67, 0.32);
+    }
+    .msg.tool .reject {
+      background: rgba(248, 81, 73, 0.16);
+      color: var(--vscode-errorForeground);
+      border-color: rgba(248, 81, 73, 0.4);
+    }
+    .msg.tool .reject:hover {
+      background: rgba(248, 81, 73, 0.3);
+    }
+    .msg.tool .resolution {
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 8px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .msg.tool .resolution.accepted {
+      background: rgba(46, 160, 67, 0.18);
+      color: var(--vscode-charts-green);
+    }
+    .msg.tool .resolution.rejected {
+      background: rgba(248, 81, 73, 0.16);
+      color: var(--vscode-errorForeground);
+    }
+    .msg.tool .resolution.reject_failed {
+      background: rgba(255, 191, 0, 0.18);
+      color: var(--vscode-charts-yellow);
+    }
     .role {
       font-size: 10px;
       font-weight: 600;
@@ -359,18 +412,7 @@ export function renderChatHtml(
         div.appendChild(badge);
         div.appendChild(name);
         div.appendChild(args);
-        if (m.tool.editedPath) {
-          const link = document.createElement("button");
-          link.className = "diff-link";
-          link.type = "button";
-          link.textContent = "View diff";
-          link.title = "Open VS Code diff editor — HEAD ↔ working tree";
-          link.dataset.path = m.tool.editedPath;
-          link.addEventListener("click", () => {
-            vscode.postMessage({ type: "viewDiff", path: m.tool.editedPath });
-          });
-          div.appendChild(link);
-        }
+        renderToolActions(div, m.tool);
       } else {
         const role = document.createElement("div");
         role.className = "role";
@@ -401,40 +443,90 @@ export function renderChatHtml(
     function updateMessage(id, patch) {
       const existing = messagesById.get(id);
       if (!existing) return;
-      // Easiest path: rebuild the node from scratch using the patched
-      // payload we get from the host. We don't keep full message state
-      // in the webview — we just patch what we render.
       if (patch.tool) {
         const badge = existing.querySelector(".badge");
         if (badge) {
           badge.className = "badge " + patch.tool.status;
           badge.textContent = patch.tool.status;
         }
-        // Surface the diff link once the tool finished — the editedPath
-        // is set at append time, but we wait for a clean ok before
-        // showing the link so the user only sees actionable rows.
-        if (patch.tool.status === "ok" && patch.tool.editedPath) {
-          let link = existing.querySelector(".diff-link");
-          if (!link) {
-            link = document.createElement("button");
-            link.className = "diff-link";
-            link.type = "button";
-            link.textContent = "View diff";
-            link.title = "Open VS Code diff editor — HEAD ↔ working tree";
-            link.dataset.path = patch.tool.editedPath;
-            link.addEventListener("click", () => {
-              vscode.postMessage({
-                type: "viewDiff",
-                path: patch.tool.editedPath,
-              });
-            });
-            existing.appendChild(link);
-          }
-        }
+        // Re-render the action group (View diff / Accept / Reject /
+        // resolution badge) from the latest tool record. Cheap; the
+        // group only has 0-3 buttons at any time.
+        renderToolActions(existing, patch.tool);
       }
       if (typeof patch.text === "string") {
         const body = existing.querySelector(".body");
         if (body) body.innerHTML = renderText(patch.text);
+      }
+    }
+
+    /**
+     * Build (or rebuild) the trailing action group on a tool row:
+     *   - Always show 'View diff' once the tool has an editedPath.
+     *   - Show ✓/✗ buttons only while resolution is null (waiting).
+     *   - Show a resolution badge once the user has accepted/rejected
+     *     (or once we couldn't revert).
+     */
+    function renderToolActions(row, tool) {
+      // Tear down any existing action elements; we always re-render
+      // from scratch to keep state consistent.
+      row.querySelectorAll(".diff-link, .actions, .resolution")
+        .forEach((n) => n.remove());
+
+      if (!tool.editedPath) return;
+      // While the tool is still running we don't show action buttons —
+      // the file may not exist yet on disk and the diff editor would
+      // open empty.
+      if (tool.status !== "ok") return;
+
+      const link = document.createElement("button");
+      link.className = "diff-link";
+      link.type = "button";
+      link.textContent = "View diff";
+      link.title = "Open VS Code diff editor — HEAD ↔ working tree";
+      link.addEventListener("click", () => {
+        vscode.postMessage({ type: "viewDiff", path: tool.editedPath });
+      });
+      row.appendChild(link);
+
+      if (tool.resolution === undefined || tool.resolution === null) {
+        const actions = document.createElement("span");
+        actions.className = "actions";
+        const accept = document.createElement("button");
+        accept.className = "accept";
+        accept.type = "button";
+        accept.title = "Keep this change";
+        accept.textContent = "✓";
+        accept.addEventListener("click", () => {
+          vscode.postMessage({
+            type: "acceptEdit",
+            toolUseId: tool.toolUseId,
+          });
+        });
+        const reject = document.createElement("button");
+        reject.className = "reject";
+        reject.type = "button";
+        reject.title = "Revert this change (git restore / unlink / snapshot)";
+        reject.textContent = "✗";
+        reject.addEventListener("click", () => {
+          vscode.postMessage({
+            type: "rejectEdit",
+            toolUseId: tool.toolUseId,
+          });
+        });
+        actions.appendChild(accept);
+        actions.appendChild(reject);
+        row.appendChild(actions);
+      } else {
+        const tag = document.createElement("span");
+        tag.className = "resolution " + tool.resolution;
+        tag.textContent =
+          tool.resolution === "accepted"
+            ? "kept"
+            : tool.resolution === "rejected"
+            ? "reverted"
+            : "revert failed";
+        row.appendChild(tag);
       }
     }
 

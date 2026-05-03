@@ -44,6 +44,21 @@ export interface ChatToolRecord {
    * comparing HEAD vs the working tree.
    */
   editedPath?: string;
+  /**
+   * Pending-edit state for Cursor-style per-file accept/reject.
+   * - `null` (or undefined) = waiting for user; show Accept/Reject buttons
+   * - `"accepted"` = user kept the change; buttons hidden
+   * - `"rejected"` = revert succeeded; buttons hidden, "(reverted)" badge
+   * - `"reject_failed"` = revert failed (file untracked + not snapshotted, etc.)
+   */
+  resolution?: "accepted" | "rejected" | "reject_failed" | null;
+  /**
+   * How we'll undo the edit if the user rejects:
+   * - `"git"` — file is tracked, use `git restore -- <path>`
+   * - `"unlink"` — file did not exist before; delete it
+   * - `"snapshot"` — file existed but is untracked; restore from in-memory snapshot
+   */
+  revertStrategy?: "git" | "unlink" | "snapshot";
 }
 
 // ─── claude stream-json events ───────────────────────────────────────
@@ -123,7 +138,9 @@ export type FromWebviewMessage =
   | { type: "reset" }
   | { type: "ready" }
   | { type: "openFolder" }
-  | { type: "viewDiff"; path: string };
+  | { type: "viewDiff"; path: string }
+  | { type: "acceptEdit"; toolUseId: string }
+  | { type: "rejectEdit"; toolUseId: string };
 
 export type FromHostMessage =
   | { type: "state"; status: BridgeStatus; activity: string | null }
