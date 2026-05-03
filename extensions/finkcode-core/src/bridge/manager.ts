@@ -216,6 +216,7 @@ export class BridgeManager implements vscode.Disposable {
 
     const args = [
       "-p",
+      "--verbose", // required when --output-format=stream-json is used with --print
       "--input-format",
       "stream-json",
       "--output-format",
