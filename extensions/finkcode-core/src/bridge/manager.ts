@@ -1,0 +1,472 @@
+// BridgeManager — owns the lifecycle of the hidden `claude` child
+// process and the chat history it produces.
+//
+// We use claude's native streaming JSON mode (`--input-format stream-json
+// --output-format stream-json`) instead of FinkSpace/FinkBridge's
+// brief.md + mailbox dance. That gives us:
+//   - no PTY / native modules required (just child_process pipes)
+//   - native tool_use events (Read/Edit/Write/Bash) without our own
+//     dispatcher
+//   - proper session lifecycle via --session-id / --resume
+//
+// One BridgeManager per workspace folder. The chat panel subscribes
+// via the event emitters; the manager doesn't know about webviews.
+
+import * as vscode from "vscode";
+import * as cp from "child_process";
+import { randomUUID } from "crypto";
+import { buildEditorSystemPrompt } from "./system-prompt";
+import type {
+  BridgeStatus,
+  ChatMessage,
+  ChatRole,
+  ChatToolRecord,
+  ClaudeAssistantEvent,
+  ClaudeEvent,
+  ClaudeUserEvent,
+} from "./types";
+
+interface BridgeManagerOptions {
+  /** Absolute workspace folder the bridge is anchored to. */
+  workspaceRoot: string;
+  /** Human-readable name (currently the folder basename). */
+  workspaceName: string;
+  /** Override path to the `claude` binary; falls back to PATH lookup. */
+  claudeBinaryPath: string;
+  /** Output channel for diagnostics. */
+  log: vscode.OutputChannel;
+}
+
+export interface BridgeState {
+  status: BridgeStatus;
+  /** Optional one-line activity hint shown in the panel header. */
+  activity: string | null;
+}
+
+/**
+ * Listener interface — webview wraps these as postMessages.
+ */
+export interface BridgeListener {
+  onState(state: BridgeState): void;
+  onAppend(message: ChatMessage): void;
+  onUpdate(messageId: string, patch: Partial<ChatMessage>): void;
+  onClear(): void;
+}
+
+const SUBSCRIPTION_ALL = "__all__";
+
+export class BridgeManager implements vscode.Disposable {
+  private child: cp.ChildProcessWithoutNullStreams | null = null;
+  private sessionId: string | null = null;
+  private state: BridgeState = { status: "idle", activity: null };
+  private history: ChatMessage[] = [];
+  private listeners = new Map<string, BridgeListener>();
+  private stdoutBuf = "";
+  private disposed = false;
+
+  constructor(private readonly opts: BridgeManagerOptions) {}
+
+  // ─── Public surface ───────────────────────────────────────────────
+
+  get workspaceRoot(): string {
+    return this.opts.workspaceRoot;
+  }
+
+  getState(): BridgeState {
+    return this.state;
+  }
+
+  getHistory(): ChatMessage[] {
+    return [...this.history];
+  }
+
+  /**
+   * Subscribe to bridge events. Returns a Disposable that removes the
+   * listener on dispose.
+   */
+  subscribe(listener: BridgeListener): vscode.Disposable {
+    const key = randomUUID();
+    this.listeners.set(key, listener);
+    // Replay current state to the new subscriber.
+    listener.onState(this.state);
+    return new vscode.Disposable(() => {
+      this.listeners.delete(key);
+    });
+  }
+
+  /**
+   * Send a user message. Spawns the claude child on first call, then
+   * streams the user message in. Returns once the message is queued —
+   * the assistant reply arrives asynchronously via listeners.
+   */
+  async send(text: string): Promise<void> {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+
+    this.appendMessage("user", trimmed);
+
+    if (!this.child) {
+      try {
+        await this.spawn();
+      } catch (e) {
+        this.appendMessage(
+          "system",
+          `Failed to start claude: ${this.errMsg(e)}`,
+        );
+        this.setState({ status: "error", activity: null });
+        return;
+      }
+    }
+
+    if (!this.child) return; // spawn failed silently
+
+    this.setState({ status: "thinking", activity: null });
+    const event = {
+      type: "user" as const,
+      message: {
+        role: "user" as const,
+        content: [{ type: "text" as const, text: trimmed }],
+      },
+    };
+    try {
+      this.child.stdin.write(JSON.stringify(event) + "\n");
+    } catch (e) {
+      this.appendMessage(
+        "system",
+        `Failed to write to claude stdin: ${this.errMsg(e)}`,
+      );
+      this.setState({ status: "error", activity: null });
+    }
+  }
+
+  /**
+   * Send Ctrl-C to claude and re-arm. Used when the assistant is stuck
+   * mid-tool or producing a runaway response.
+   */
+  interrupt(): void {
+    if (!this.child) return;
+    try {
+      this.child.kill("SIGINT");
+    } catch {
+      // best-effort
+    }
+    this.child = null;
+    this.setState({ status: "idle", activity: null });
+    this.appendMessage("system", "Interrupted.");
+  }
+
+  /**
+   * Kill the child and clear chat history.
+   */
+  reset(): void {
+    if (this.child) {
+      try {
+        this.child.kill();
+      } catch {
+        // ignore
+      }
+      this.child = null;
+    }
+    this.sessionId = null;
+    this.history = [];
+    this.notifyClear();
+    this.setState({ status: "idle", activity: null });
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    if (this.child) {
+      try {
+        this.child.kill();
+      } catch {
+        // ignore
+      }
+      this.child = null;
+    }
+    this.listeners.clear();
+  }
+
+  // ─── Spawn + stream-json plumbing ────────────────────────────────
+
+  private async spawn(): Promise<void> {
+    const binary = this.resolveClaudeBinary();
+    if (!binary) {
+      throw new Error(
+        "`claude` CLI not found. Install Claude Code or set finkcode.claudeBinaryPath in settings.",
+      );
+    }
+
+    this.sessionId = this.sessionId ?? randomUUID();
+    const systemPrompt = buildEditorSystemPrompt({
+      workspaceRoot: this.opts.workspaceRoot,
+      workspaceName: this.opts.workspaceName,
+    });
+
+    const args = [
+      "-p",
+      "--input-format",
+      "stream-json",
+      "--output-format",
+      "stream-json",
+      "--include-partial-messages",
+      "--permission-mode",
+      "bypassPermissions",
+      "--session-id",
+      this.sessionId,
+      "--system-prompt",
+      systemPrompt,
+      "--no-session-persistence",
+    ];
+
+    this.opts.log.appendLine(
+      `[bridge] spawning ${binary} (session ${this.sessionId})`,
+    );
+    this.setState({ status: "spawning", activity: "Starting Claude…" });
+
+    const child = cp.spawn(binary, args, {
+      cwd: this.opts.workspaceRoot,
+      stdio: ["pipe", "pipe", "pipe"],
+      env: { ...process.env },
+      // Required on Windows when shellPath has spaces — bypass cmd.exe
+      // quoting issues by going straight to the binary.
+      windowsHide: true,
+      shell: false,
+    });
+
+    this.child = child;
+    this.stdoutBuf = "";
+
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => this.handleStdoutChunk(chunk));
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      this.opts.log.append(`[claude stderr] ${chunk}`);
+    });
+    child.on("error", (err) => {
+      this.opts.log.appendLine(`[bridge] spawn error: ${err.message}`);
+      this.appendMessage("system", `claude spawn error: ${err.message}`);
+      this.child = null;
+      this.setState({ status: "error", activity: null });
+    });
+    child.on("exit", (code, signal) => {
+      this.opts.log.appendLine(
+        `[bridge] claude exited code=${code} signal=${signal}`,
+      );
+      const wasOurs = child === this.child;
+      if (wasOurs) {
+        this.child = null;
+        if (!this.disposed && this.state.status !== "idle") {
+          if (code !== 0 && code !== null) {
+            this.appendMessage(
+              "system",
+              `Claude exited with code ${code}.`,
+            );
+            this.setState({ status: "error", activity: null });
+          } else {
+            this.setState({ status: "idle", activity: null });
+          }
+        }
+      }
+    });
+  }
+
+  private handleStdoutChunk(chunk: string): void {
+    this.stdoutBuf += chunk;
+    let idx: number;
+    // Split on newlines; each line should be a complete JSON object.
+    while ((idx = this.stdoutBuf.indexOf("\n")) !== -1) {
+      const line = this.stdoutBuf.slice(0, idx).trim();
+      this.stdoutBuf = this.stdoutBuf.slice(idx + 1);
+      if (!line) continue;
+      let evt: ClaudeEvent;
+      try {
+        evt = JSON.parse(line) as ClaudeEvent;
+      } catch (e) {
+        this.opts.log.appendLine(
+          `[bridge] non-JSON line: ${line.slice(0, 200)}`,
+        );
+        continue;
+      }
+      this.handleEvent(evt);
+    }
+  }
+
+  private handleEvent(evt: ClaudeEvent): void {
+    switch (evt.type) {
+      case "system":
+        if (evt.session_id) this.sessionId = evt.session_id;
+        this.opts.log.appendLine(
+          `[bridge] system event subtype=${evt.subtype ?? "?"}`,
+        );
+        return;
+      case "assistant":
+        this.handleAssistantEvent(evt);
+        return;
+      case "user":
+        this.handleUserEvent(evt);
+        return;
+      case "result":
+        this.opts.log.appendLine(
+          `[bridge] result subtype=${evt.subtype ?? "?"} cost=${evt.total_cost_usd ?? 0} duration=${evt.duration_ms ?? 0}ms`,
+        );
+        if (evt.is_error && evt.result) {
+          this.appendMessage("system", `Claude error: ${evt.result}`);
+          this.setState({ status: "error", activity: null });
+        } else {
+          this.setState({ status: "idle", activity: null });
+        }
+        return;
+      default:
+        this.opts.log.appendLine(
+          `[bridge] unknown event type: ${(evt as { type?: string }).type ?? "?"}`,
+        );
+    }
+  }
+
+  private handleAssistantEvent(evt: ClaudeAssistantEvent): void {
+    for (const block of evt.message.content) {
+      if (block.type === "text") {
+        if (block.text.trim()) {
+          this.appendMessage("assistant", block.text);
+        }
+      } else if (block.type === "tool_use") {
+        this.appendToolMessage({
+          toolUseId: block.id,
+          name: block.name,
+          input: block.input,
+          status: "pending",
+        });
+        this.setState({
+          status: "tool",
+          activity: `Running ${block.name}…`,
+        });
+      }
+    }
+  }
+
+  private handleUserEvent(evt: ClaudeUserEvent): void {
+    // The protocol echoes tool_results back as `user` events. We use
+    // those to flip pending tool records to ok/error.
+    for (const block of evt.message.content) {
+      if (block.type === "tool_result") {
+        const text =
+          typeof block.content === "string"
+            ? block.content
+            : block.content
+                .map((c) => (c.type === "text" ? c.text ?? "" : ""))
+                .join("");
+        const messageId = this.findToolMessageByUseId(block.tool_use_id);
+        if (messageId) {
+          this.updateMessage(messageId, {
+            tool: {
+              ...(this.findMessage(messageId)?.tool as ChatToolRecord),
+              status: block.is_error ? "error" : "ok",
+              result: text,
+              error: block.is_error ? text : undefined,
+            },
+          });
+        }
+      }
+    }
+    this.setState({ status: "thinking", activity: null });
+  }
+
+  // ─── Chat history mutations ──────────────────────────────────────
+
+  private appendMessage(role: ChatRole, text: string): string {
+    const message: ChatMessage = {
+      id: randomUUID(),
+      role,
+      text,
+      createdAt: Date.now(),
+    };
+    this.history.push(message);
+    this.notifyAppend(message);
+    return message.id;
+  }
+
+  private appendToolMessage(tool: ChatToolRecord): string {
+    const summary = `${tool.name}(${this.shortInput(tool.input)})`;
+    const message: ChatMessage = {
+      id: randomUUID(),
+      role: "tool",
+      text: summary,
+      tool,
+      createdAt: Date.now(),
+    };
+    this.history.push(message);
+    this.notifyAppend(message);
+    return message.id;
+  }
+
+  private updateMessage(id: string, patch: Partial<ChatMessage>): void {
+    const idx = this.history.findIndex((m) => m.id === id);
+    if (idx < 0) return;
+    this.history[idx] = { ...this.history[idx], ...patch };
+    this.notifyUpdate(id, patch);
+  }
+
+  private findMessage(id: string): ChatMessage | undefined {
+    return this.history.find((m) => m.id === id);
+  }
+
+  private findToolMessageByUseId(toolUseId: string): string | null {
+    for (let i = this.history.length - 1; i >= 0; i--) {
+      const m = this.history[i];
+      if (m.role === "tool" && m.tool?.toolUseId === toolUseId) {
+        return m.id;
+      }
+    }
+    return null;
+  }
+
+  private shortInput(input: Record<string, unknown>): string {
+    const path = input.path ?? input.file_path;
+    if (typeof path === "string") return path;
+    const cmd = input.command;
+    if (typeof cmd === "string") {
+      return cmd.length > 60 ? cmd.slice(0, 57) + "…" : cmd;
+    }
+    return "…";
+  }
+
+  // ─── Listener notifications ──────────────────────────────────────
+
+  private setState(state: BridgeState): void {
+    this.state = state;
+    for (const l of this.listeners.values()) l.onState(state);
+  }
+
+  private notifyAppend(message: ChatMessage): void {
+    for (const l of this.listeners.values()) l.onAppend(message);
+  }
+
+  private notifyUpdate(id: string, patch: Partial<ChatMessage>): void {
+    for (const l of this.listeners.values()) l.onUpdate(id, patch);
+  }
+
+  private notifyClear(): void {
+    for (const l of this.listeners.values()) l.onClear();
+  }
+
+  // ─── Helpers ─────────────────────────────────────────────────────
+
+  private resolveClaudeBinary(): string | null {
+    const override = this.opts.claudeBinaryPath.trim();
+    if (override) return override;
+    // Plain `claude` lookup; child_process will resolve via PATH on
+    // spawn. We keep this string simple so Windows + POSIX both work.
+    return "claude";
+  }
+
+  private errMsg(e: unknown): string {
+    if (e instanceof Error) return e.message;
+    if (typeof e === "string") return e;
+    return JSON.stringify(e);
+  }
+}
+
+// Marker so callers that want to subscribe-all can opt-in by passing
+// this string instead of allocating a UUID. Not used yet; reserved for
+// the diff overlay listener in Phase 3.
+export const SubscribeAll = SUBSCRIPTION_ALL;

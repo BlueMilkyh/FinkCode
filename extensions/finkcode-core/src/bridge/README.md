@@ -1,19 +1,24 @@
-# `bridge/` — hidden Claude CLI PTY
+# `bridge/` — claude CLI integration
 
-Phase 2.
+**Phase 2 — implemented.**
 
-Ports `src/finkbridge/manager.ts` from FinkSpace. Same JSON-mailbox
-protocol; replaces FinkSpace's Tauri PTY with `node-pty.spawn`.
+Talks to the user's `claude` CLI via its native `--input-format
+stream-json` / `--output-format stream-json` headless mode. No PTY
+required — plain `child_process.spawn` with stdin/stdout pipes.
+Tool dispatching is delegated to claude's built-in tool catalog
+(Read, Edit, Write, Bash, Grep, Glob).
 
-Files to land here:
+Files:
 
-- `manager.ts` — start/stop, mailbox poller, watchdog timer
-- `envelope.ts` — `BridgeEnvelope`, `BridgeToolCall`, `BridgeToolResult`
-  (port verbatim from `src/finkbridge/types.ts`)
-- `brief.ts` — system prompt written to `<workspace>/.finkcode/brief.md`
-  (port from `src/finkeditor/brief.ts`, drop FinkSpace-specific tools)
-- `consent.ts` — pre-accept the `~/.claude.json` consent dialogs
-  (port the relevant bit of `manager.ts:81–120`)
+- `manager.ts` — `BridgeManager` class. Spawns claude on first user
+  message, parses stream-json line-by-line, exposes a subscribe-based
+  event interface for the webview.
+- `system-prompt.ts` — the editor brief, injected via
+  `--system-prompt` at spawn time.
+- `types.ts` — claude stream-json event shapes + internal chat-message
+  types + the host↔webview message envelope.
 
-Activation: `bridge.start(context)` is called from `extension.ts` once
-the user opens a folder. Idempotent.
+Phase 3 will wrap Edit/Write tool_use blocks: instead of letting
+claude execute them directly, we'll intercept, hold the edits in a
+pending-edit-store (`../diff/`), and apply via `WorkspaceEdit` only
+once the user accepts.
