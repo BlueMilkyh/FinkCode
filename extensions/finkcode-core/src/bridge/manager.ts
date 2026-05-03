@@ -14,6 +14,9 @@
 
 import * as vscode from "vscode";
 import * as cp from "child_process";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 import { randomUUID } from "crypto";
 import { buildEditorSystemPrompt } from "./system-prompt";
 import type {
@@ -62,7 +65,10 @@ export class BridgeManager implements vscode.Disposable {
   private history: ChatMessage[] = [];
   private listeners = new Map<string, BridgeListener>();
   private stdoutBuf = "";
+  private stderrTail: string[] = [];
   private disposed = false;
+  /** Maximum stderr lines we hold for inclusion in exit-error messages. */
+  private static readonly STDERR_TAIL_MAX = 20;
 
   constructor(private readonly opts: BridgeManagerOptions) {}
 
@@ -196,6 +202,12 @@ export class BridgeManager implements vscode.Disposable {
       );
     }
 
+    // Pre-accept the bypassPermissions consent + workspace trust in
+    // ~/.claude.json so claude doesn't prompt and immediately exit
+    // when run with --permission-mode bypassPermissions. Mirrors what
+    // FinkSpace's finkbridge/manager.ts does for the same reason.
+    this.preAcceptClaudeConsent();
+
     this.sessionId = this.sessionId ?? randomUUID();
     const systemPrompt = buildEditorSystemPrompt({
       workspaceRoot: this.opts.workspaceRoot,
@@ -241,6 +253,16 @@ export class BridgeManager implements vscode.Disposable {
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
       this.opts.log.append(`[claude stderr] ${chunk}`);
+      // Keep a rolling tail so we can surface the actual error message
+      // when claude exits non-zero, without making the user dig into
+      // the Output channel.
+      for (const line of chunk.split(/\r?\n/)) {
+        if (!line.trim()) continue;
+        this.stderrTail.push(line);
+        if (this.stderrTail.length > BridgeManager.STDERR_TAIL_MAX) {
+          this.stderrTail.shift();
+        }
+      }
     });
     child.on("error", (err) => {
       this.opts.log.appendLine(`[bridge] spawn error: ${err.message}`);
@@ -257,15 +279,18 @@ export class BridgeManager implements vscode.Disposable {
         this.child = null;
         if (!this.disposed && this.state.status !== "idle") {
           if (code !== 0 && code !== null) {
+            const tail = this.stderrTail.slice(-8).join("\n");
+            const detail = tail ? `\n\nstderr:\n\`\`\`\n${tail}\n\`\`\`` : "";
             this.appendMessage(
               "system",
-              `Claude exited with code ${code}.`,
+              `Claude exited with code ${code}.${detail}`,
             );
             this.setState({ status: "error", activity: null });
           } else {
             this.setState({ status: "idle", activity: null });
           }
         }
+        this.stderrTail = [];
       }
     });
   }
@@ -457,6 +482,71 @@ export class BridgeManager implements vscode.Disposable {
     // Plain `claude` lookup; child_process will resolve via PATH on
     // spawn. We keep this string simple so Windows + POSIX both work.
     return "claude";
+  }
+
+  /**
+   * Mutate `~/.claude.json` so claude doesn't prompt for trust /
+   * bypass-permissions consent on startup. Without this, running with
+   * `--permission-mode bypassPermissions` against a workspace claude
+   * has never seen exits with code 1 immediately on the first user
+   * message. Best-effort — silently no-ops if the file is unreadable.
+   */
+  private preAcceptClaudeConsent(): void {
+    const home = os.homedir();
+    if (!home) return;
+    const configPath = path.join(home, ".claude.json");
+    let config: Record<string, unknown> = {};
+    try {
+      if (fs.existsSync(configPath)) {
+        const raw = fs.readFileSync(configPath, "utf8");
+        if (raw.trim().length > 0) {
+          const parsed = JSON.parse(raw);
+          if (parsed && typeof parsed === "object") {
+            config = parsed as Record<string, unknown>;
+          }
+        }
+      }
+    } catch (e) {
+      this.opts.log.appendLine(
+        `[bridge] could not read ~/.claude.json: ${this.errMsg(e)}`,
+      );
+      return;
+    }
+
+    const workDir = this.opts.workspaceRoot;
+    config.bypassPermissionsModeAccepted = true;
+    if (config.hasCompletedOnboarding == null) {
+      config.hasCompletedOnboarding = true;
+    }
+    const projects =
+      (config.projects as Record<string, Record<string, unknown>> | undefined) ??
+      {};
+    // Trust the workspace under a few path-format variants — claude is
+    // sometimes picky about whether the key has forward or backward
+    // slashes.
+    const variants = new Set<string>([
+      workDir,
+      workDir.replace(/\\/g, "/"),
+      workDir.replace(/\//g, "\\"),
+    ]);
+    for (const key of variants) {
+      const existing =
+        (projects[key] as Record<string, unknown> | undefined) ?? {};
+      existing.hasTrustDialogAccepted = true;
+      if (existing.hasCompletedProjectOnboarding == null) {
+        existing.hasCompletedProjectOnboarding = true;
+      }
+      projects[key] = existing;
+    }
+    config.projects = projects;
+
+    try {
+      fs.writeFileSync(configPath, JSON.stringify(config, null, 2), "utf8");
+    } catch (e) {
+      this.opts.log.appendLine(
+        `[bridge] could not write ~/.claude.json: ${this.errMsg(e)}`,
+      );
+    }
   }
 
   private errMsg(e: unknown): string {
