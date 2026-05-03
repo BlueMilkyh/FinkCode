@@ -1,0 +1,40 @@
+{
+  "_comment": "Branding overlay for the VSCodium fork. Phase 1 step 4 applies this on top of the upstream microsoft/vscode product.json. Fields here override the upstream defaults; everything not listed is inherited.",
+
+  "nameShort": "FinkCode",
+  "nameLong": "FinkCode",
+  "applicationName": "finkcode",
+  "dataFolderName": ".finkcode",
+  "win32MutexName": "finkcode",
+  "win32DirName": "FinkCode",
+  "win32NameVersion": "FinkCode",
+  "win32RegValueName": "FinkCode",
+  "win32AppUserModelId": "BlueMilkyh.FinkCode",
+  "win32ShellNameShort": "FinkCode",
+  "darwinBundleIdentifier": "com.finkcode.app",
+  "linuxIconName": "finkcode",
+  "serverApplicationName": "finkcode-server",
+  "serverDataFolderName": ".finkcode-server",
+  "urlProtocol": "finkcode",
+
+  "licenseName": "MIT",
+  "licenseUrl": "https://github.com/BlueMilkyh/FinkCode/blob/main/LICENSE.txt",
+
+  "reportIssueUrl": "https://github.com/BlueMilkyh/FinkCode/issues/new",
+  "documentationUrl": "https://github.com/BlueMilkyh/FinkCode#readme",
+  "releaseNotesUrl": "https://github.com/BlueMilkyh/FinkCode/releases",
+
+  "_extensionMarketplace_comment": "Phase 5 distribution decision. OpenVSX is the OSS-fork default; revisit if we self-host.",
+  "extensionsGallery": {
+    "serviceUrl": "https://open-vsx.org/vscode/gallery",
+    "itemUrl": "https://open-vsx.org/vscode/item",
+    "resourceUrlTemplate": "https://open-vsx.org/vscode/unpkg/{publisher}/{name}/{version}/{path}"
+  },
+
+  "builtInExtensions": [],
+
+  "_uiTheme_comment": "Phase 1 step 4 — emerald accent on dark, matching the FinkSpace product card.",
+  "defaultTheme": "Default Dark Modern",
+
+  "_finkcodeBootstrap_comment": "Phase 1 step 7 — finkcode-core ships pre-installed (built into the app). Copied into extensions/ during build."
+}

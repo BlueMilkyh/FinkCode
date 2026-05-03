@@ -9,6 +9,10 @@ yarn-error.log*
 .yarn/install-state.gz
 .pnp.*
 
+# ───────────────────────── Upstream VSCode checkout ──────────────────
+# Cloned by build/bootstrap-upstream.sh at the pinned tag — see BUILD.md.
+vscode/
+
 # ───────────────────────── VSCode build outputs ──────────────────────
 out/
 out-build/

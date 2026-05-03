@@ -1,0 +1,121 @@
+{
+  "name": "finkcode-core",
+  "displayName": "FinkCode Core",
+  "description": "Built-in AI features for FinkCode — chat side panel, Cmd+K inline edits, multi-file Composer, per-hunk accept/reject diff overlays.",
+  "version": "0.0.1",
+  "publisher": "BlueMilkyh",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "AI",
+    "Programming Languages",
+    "Snippets"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "finkcode.editInline",
+        "title": "FinkCode: Edit selection with AI",
+        "category": "FinkCode"
+      },
+      {
+        "command": "finkcode.openChat",
+        "title": "FinkCode: Open AI chat panel",
+        "category": "FinkCode"
+      },
+      {
+        "command": "finkcode.openComposer",
+        "title": "FinkCode: Open Composer (multi-file edits)",
+        "category": "FinkCode"
+      },
+      {
+        "command": "finkcode.acceptHunk",
+        "title": "FinkCode: Accept pending hunk",
+        "category": "FinkCode"
+      },
+      {
+        "command": "finkcode.rejectHunk",
+        "title": "FinkCode: Reject pending hunk",
+        "category": "FinkCode"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "finkcode.editInline",
+        "key": "ctrl+k",
+        "mac": "cmd+k",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "finkcode.openChat",
+        "key": "ctrl+l",
+        "mac": "cmd+l"
+      },
+      {
+        "command": "finkcode.openComposer",
+        "key": "ctrl+i",
+        "mac": "cmd+i"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "finkcode",
+          "title": "FinkCode",
+          "icon": "$(sparkle)"
+        }
+      ]
+    },
+    "views": {
+      "finkcode": [
+        {
+          "type": "webview",
+          "id": "finkcode.chat",
+          "name": "Chat"
+        },
+        {
+          "type": "webview",
+          "id": "finkcode.composer",
+          "name": "Composer"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "FinkCode",
+      "properties": {
+        "finkcode.claudeBinaryPath": {
+          "type": "string",
+          "default": "",
+          "description": "Override the path to the `claude` CLI used by FinkCode's hidden bridge agent. Leave empty to detect via PATH."
+        },
+        "finkcode.permissionMode": {
+          "type": "string",
+          "default": "bypassPermissions",
+          "enum": ["bypassPermissions", "askPermissions"],
+          "description": "How the bridge agent handles tool-permission prompts. Mirrors finkbridge."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "dependencies": {
+    "diff": "^9.0.0",
+    "node-pty": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/diff": "^7.0.0",
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.95.0",
+    "typescript": "^5.4.0"
+  }
+}

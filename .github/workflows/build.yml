@@ -1,0 +1,53 @@
+name: Build FinkCode
+# Phase 1 placeholder — three-platform matrix that mirrors what
+# VSCodium does. Currently runs the bootstrap scripts (which print
+# "not yet implemented" and exit 0); the real build flow lands as
+# part of Phase 1 step 5–6.
+#
+# Trigger: any push to main, plus tag pushes (`v*`) which will later
+# also publish artifacts.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "yarn"
+          cache-dependency-path: extensions/finkcode-core/yarn.lock
+
+      - name: Bootstrap upstream VSCode (placeholder)
+        shell: bash
+        run: ./build/bootstrap-upstream.sh
+
+      - name: Apply branding overlay (placeholder)
+        shell: bash
+        run: ./build/apply-overlay.sh
+
+      - name: Apply patches (placeholder)
+        shell: bash
+        run: ./build/apply-patches.sh
+
+      # Phase 1 step 5–6 will add:
+      #   - cd vscode && yarn
+      #   - yarn gulp vscode-${{ matrix.os }}-x64
+      #   - upload artifacts (.exe / .dmg / .AppImage / .deb)
