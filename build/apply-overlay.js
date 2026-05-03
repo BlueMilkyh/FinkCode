@@ -132,7 +132,46 @@ if (!existsSync(targetExt)) {
   }
 }
 
-// ─── 3. Sanity report ────────────────────────────────────────────────
+// ─── 3. Generate platform icons from assets/finkcode-logo.png ────────
+
+const iconScript = join(REPO_ROOT, "build", "generate-icons.py");
+const iconSource = join(REPO_ROOT, "assets", "finkcode-logo.png");
+
+if (existsSync(iconSource) && existsSync(iconScript)) {
+  // Resolve a Python executable. We prefer the user-scoped 3.12 install
+  // from Phase 1 prep, then fall back to whatever's on PATH.
+  const pythonCandidates = [
+    process.env.PYTHON,
+    process.platform === "win32"
+      ? join(process.env.LOCALAPPDATA || "", "Programs", "Python", "Python312", "python.exe")
+      : null,
+    "python3",
+    "python",
+  ].filter(Boolean);
+
+  let ran = false;
+  for (const py of pythonCandidates) {
+    try {
+      execSync(`"${py}" "${iconScript}"`, { stdio: "inherit" });
+      ran = true;
+      break;
+    } catch {
+      // try the next candidate
+    }
+  }
+  if (!ran) {
+    log(
+      "WARNING: could not run generate-icons.py — icons will fall back to upstream. " +
+        "Install Pillow: python -m pip install Pillow",
+    );
+  }
+} else {
+  log(
+    `skipping icon generation (source: ${existsSync(iconSource)}, script: ${existsSync(iconScript)})`,
+  );
+}
+
+// ─── 4. Sanity report ────────────────────────────────────────────────
 
 log("done.");
 log(`Active branding: nameLong="${merged.nameLong}" applicationName="${merged.applicationName}"`);

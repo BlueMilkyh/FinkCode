@@ -14,11 +14,12 @@ it (Phase 5 concern).
 ## Prerequisites
 
 - **Node 22.22.1** (matches upstream `vscode/.nvmrc`)
-- **Python 3** (any 3.x — for node-gyp)
+- **Python 3** (any 3.x — for node-gyp; also for `build/generate-icons.py`)
+- **Pillow** (for icon generation): `python -m pip install Pillow`
 - **Platform native toolchain:**
-  - Windows: **Visual Studio Build Tools 2022/2026** with "Desktop development with C++" workload
+  - Windows: **Visual Studio Build Tools 2022/2026** with "Desktop development with C++" workload **and the "MSVC v143 - VS 2022 C++ x64/x86 Spectre-mitigated libs (Latest)" individual component** — VSCode's native modules require Spectre mitigation
   - macOS: Xcode + command-line tools
-  - Linux: `libxkbfile-dev`, `libsecret-1-dev`, `pkg-config`, `g++`, `libsecret-1-dev`
+  - Linux: `libxkbfile-dev`, `libsecret-1-dev`, `pkg-config`, `g++`
 
 ## Build flow
 
