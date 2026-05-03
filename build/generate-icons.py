@@ -81,6 +81,23 @@ def main() -> int:
     resize_with_aspect(src, 1024).save(linux_path, format="PNG")
     log(f"wrote {linux_path.relative_to(REPO_ROOT)} (1024x1024)")
 
+    # ── Linux: rpm/code.xpm (X11 pixmap, legacy) ────────────────────
+    # Pillow ships a reader but no writer for XPM. Skipping leaves
+    # upstream's XPM unchanged — only matters on RPM-based distros
+    # using legacy X11 pixmap as the icon source. Phase 5 distribution
+    # task can revisit this with `imagemagick convert` if needed.
+
+    # ── Server / web: greeter PNGs + favicon ────────────────────────
+    server = VSCODE_DIR / "resources" / "server"
+    if server.exists():
+        for size, name in ((192, "code-192.png"), (512, "code-512.png")):
+            path = server / name
+            resize_with_aspect(src, size).save(path, format="PNG")
+            log(f"wrote {path.relative_to(REPO_ROOT)} ({size}x{size})")
+        favicon = server / "favicon.ico"
+        src.save(favicon, format="ICO", sizes=[(16, 16), (32, 32), (48, 48)])
+        log(f"wrote {favicon.relative_to(REPO_ROOT)} (3 sizes)")
+
     log("done.")
     return 0
 
