@@ -45,6 +45,16 @@
         "command": "finkcode.rejectHunk",
         "title": "FinkCode: Reject pending hunk",
         "category": "FinkCode"
+      },
+      {
+        "command": "finkcode.openInFinkSpace",
+        "title": "FinkCode: Open this folder in FinkSpace",
+        "category": "FinkCode"
+      },
+      {
+        "command": "finkcode.openSwarmInFinkSpace",
+        "title": "FinkCode: Open Swarm view in FinkSpace",
+        "category": "FinkCode"
       }
     ],
     "keybindings": [
@@ -96,6 +106,11 @@
           "default": "bypassPermissions",
           "enum": ["bypassPermissions", "askPermissions"],
           "description": "How the bridge agent handles tool-permission prompts. Mirrors finkbridge."
+        },
+        "finkcode.finkSpaceBinaryPath": {
+          "type": "string",
+          "default": "",
+          "description": "Override the path to the `finkspace` launcher used by 'Open in FinkSpace' commands. Leave empty to detect via PATH and well-known install dirs."
         }
       }
     }
